@@ -15,7 +15,6 @@
     along with md5lamacz.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "hash.h"
 #include <vector>
 #include <thread>
 #include <array>
@@ -27,6 +26,9 @@
 #include <set>
 #include <iostream>
 
+#include "hash.h"
+#include "thread_manager.h"
+
 typedef std::vector<std::string> DictionaryVec;
 typedef DictionaryVec::const_iterator DictionaryIterator;
 
@@ -34,99 +36,7 @@ typedef std::vector<std::thread> ThreadVec;
 typedef std::pair<std::string, Hash> ProducedHashPair;
 typedef std::function<ProducedHashPair(const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)> SingleWordFunctor;
 
-std::string& toUpper(std::string& str)
-{
-  for (auto& c : str) {
-    c = std::toupper(c);
-  }
-  return str;
-}
-std::string& toLower(std::string& str)
-{
-  for (auto& c : str) {
-    c = std::tolower(c);
-  }
-  return str;
-}
-
-const std::array<SingleWordFunctor, 3> SINGLE_WORD_FUNCTORS 
-{
-  [](const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)
-  {
-    if (round == 0) {
-      return std::make_pair(*it, Hash(*it));
-    } else {
-      std::string str = *it;
-      str.append(std::to_string(round-1));
-      return std::make_pair(str, Hash(str));
-    }
-  },
-  [](const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)
-  {
-    std::string str = *it;
-    str[0] = std::toupper(str[0]);
-    if (round > 0) {
-      str.append(std::to_string(round-1));
-    }
-    return std::make_pair(str, Hash(str));
-  },
-  [](const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)
-  {
-    std::string str = *it;
-    toUpper(str);
-    if (round > 0) {
-      str.append(std::to_string(round-1));
-    }
-    return std::make_pair(str, Hash(str));
-  }
-};
-
 DictionaryVec dictionary;
-
-std::vector<ProducedHashPair> foundPasswords;
-std::mutex foundPasswordsMtx;
-std::atomic<bool> run {true};
-std::atomic<uint64_t> n {0};
-void threadMain(const DictionaryIterator begin, const DictionaryIterator end, const PasswordMap& passwordHashes)
-{
-  uint64_t round = 0;
-
-  while (true) {
-    auto it = begin;
-    
-    while (it < end) {
-      for (const auto& getPasswordHashPair : SINGLE_WORD_FUNCTORS) {
-	auto newProduct = getPasswordHashPair(dictionary, it, round);
-	if (passwordHashes.find(newProduct.second) != passwordHashes.end()) {
-	  std::lock_guard<std::mutex> lock(foundPasswordsMtx);
-	  foundPasswords.emplace_back(std::move(newProduct));
-	}
-      }
-      if (!run.load()) {
-	n.fetch_add(end-it);
-	return;
-      }
-      ++it;
-    }
-    n.fetch_add(dictionary.size());
-    ++round;
-  }
-}
-
-
-void launchProducerThreads(ThreadVec& producerThreads, const PasswordMap& passwordHashes)
-{
-  auto n = std::max(std::thread::hardware_concurrency(), 1u);
-  uint64_t s = dictionary.size()/n;
-  uint32_t i = 0;
-  if (s > 0) {
-    for (; i < n-1; ++i) {
-      producerThreads.emplace_back(std::bind(threadMain, dictionary.begin()+s*i, dictionary.begin()+s*(i+1), passwordHashes));
-    }
-  }
-  producerThreads.emplace_back(std::bind(threadMain, dictionary.begin()+s*i, dictionary.end(), passwordHashes));
-  
-}
 
 void loadPasswords(const std::string& fileName, PasswordMap& map)
 {
@@ -160,6 +70,10 @@ void loadDictionary(const std::string& fileName)
   }
 }
 
+extern std::mutex foundPasswordsMtx;
+extern std::atomic<uint64_t> n;
+extern std::vector<ProducedHashPair> foundPasswords;
+
 int main()
 {
   ThreadVec producerThreads;
@@ -167,13 +81,13 @@ int main()
 
   loadDictionary("slownik.txt");
   loadPasswords("baza.txt", map);
-  launchProducerThreads(producerThreads, map);
 
+  ThreadManager threadManager {map};
+  threadManager.launchProducers();
   std::this_thread::sleep_for(std::chrono::seconds(6));
-  run.store(false);
-  for (auto& thread : producerThreads) {
-    thread.join();
-  }
+
+  threadManager.stopProducers();
+
   std::lock_guard<std::mutex> lock(foundPasswordsMtx);
   for (const auto& foundPassword : foundPasswords) {
     auto range = map.equal_range(foundPassword.second);

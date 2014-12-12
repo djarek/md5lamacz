@@ -48,4 +48,7 @@ struct HashMapFunctor //funktor hashujacy Hashe dla tablicy hashujacej #incepcja
 
 typedef std::unordered_multimap<Hash, std::string, HashMapFunctor> PasswordMap;
 
+std::string& toLower(std::string& str);
+std::string& toUpper(std::string& str);
+
 #endif //__HASH_H__

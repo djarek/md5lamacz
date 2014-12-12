@@ -20,8 +20,6 @@
 
 #include <thread>
 #include <vector>
-#include <atomic>
-#include <mutex>
 #include "hash.h"
 typedef std::vector<std::thread> ThreadVec;
 typedef std::vector<std::string> DictionaryVec;
@@ -45,7 +43,6 @@ private:
   ThreadVec m_producers;
   std::thread m_consumer;
   const PasswordMap& m_passwordHashes;
-  std::atomic<bool> m_run {true};
 };
 
 #endif //__THREAD_MANAGER_H__

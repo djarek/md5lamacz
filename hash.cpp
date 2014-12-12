@@ -61,3 +61,18 @@ std::ostream& operator<<(std::ostream& output, const Hash& input)
   output << std::hex << swapBytes(input.hash[1]);
   return output;
 }
+
+std::string& toUpper(std::string& str)
+{
+  for (auto& c : str) {
+    c = std::toupper(c);
+  }
+  return str;
+}
+std::string& toLower(std::string& str)
+{
+  for (auto& c : str) {
+    c = std::tolower(c);
+  }
+  return str;
+}
