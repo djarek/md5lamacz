@@ -69,6 +69,7 @@ std::string& toUpper(std::string& str)
   }
   return str;
 }
+
 std::string& toLower(std::string& str)
 {
   for (auto& c : str) {

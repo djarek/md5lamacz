@@ -77,12 +77,12 @@ extern std::vector<ProducedHashPair> foundPasswords;
 int main()
 {
   ThreadVec producerThreads;
-  PasswordMap map;
+  PasswordMap passwordHashes;
 
   loadDictionary("slownik.txt");
-  loadPasswords("baza.txt", map);
+  loadPasswords("baza.txt", passwordHashes);
 
-  ThreadManager threadManager {map};
+  ThreadManager threadManager {passwordHashes};
   threadManager.launchProducers();
   std::this_thread::sleep_for(std::chrono::seconds(6));
 
@@ -90,7 +90,7 @@ int main()
 
   std::lock_guard<std::mutex> lock(foundPasswordsMtx);
   for (const auto& foundPassword : foundPasswords) {
-    auto range = map.equal_range(foundPassword.second);
+    auto range = passwordHashes.equal_range(foundPassword.second);
     std::for_each(
       range.first,
       range.second,

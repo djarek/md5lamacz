@@ -67,7 +67,7 @@ void producerThreadMain(const DictionaryIterator begin, const DictionaryIterator
       for (const auto& getPasswordHashPair : SINGLE_WORD_FUNCTORS) {
 	auto newProduct = getPasswordHashPair(dictionary, it, round);
 	if (passwordHashes.find(newProduct.second) != passwordHashes.end()) {
-	  std::lock_guard<std::mutex> lock(foundPasswordsMtx);
+	  std::lock_guard<std::mutex> lock {foundPasswordsMtx};
 	  foundPasswords.emplace_back(std::move(newProduct));
 	}
       }
@@ -89,7 +89,7 @@ void consumerThreadMain()
 
     {
       std::lock_guard<std::mutex> {foundPasswordsMtx};
-      results = foundPasswords;
+      results = std::move(foundPasswords);
     }
 
     for (const auto& result : results) {
