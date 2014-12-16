@@ -16,8 +16,6 @@
 */
 
 #include <vector>
-#include <thread>
-#include <array>
 #include <mutex>
 #include <atomic>
 #include <fstream>
@@ -76,7 +74,6 @@ extern std::vector<ProducedHashPair> foundPasswords;
 
 int main()
 {
-  ThreadVec producerThreads;
   PasswordMap passwordHashes;
 
   loadDictionary("slownik.txt");

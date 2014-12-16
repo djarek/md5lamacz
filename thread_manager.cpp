@@ -89,7 +89,7 @@ void consumerThreadMain()
 
     {
       std::lock_guard<std::mutex> {foundPasswordsMtx};
-      results = std::move(foundPasswords);
+      std::swap(foundPasswords, results);
     }
 
     for (const auto& result : results) {
