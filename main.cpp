@@ -16,23 +16,14 @@
 */
 
 #include <vector>
-#include <mutex>
 #include <atomic>
 #include <fstream>
-#include <chrono>
 #include <algorithm>
 #include <set>
 #include <iostream>
 
 #include "hash.h"
 #include "thread_manager.h"
-
-typedef std::vector<std::string> DictionaryVec;
-typedef DictionaryVec::const_iterator DictionaryIterator;
-
-typedef std::vector<std::thread> ThreadVec;
-typedef std::pair<std::string, Hash> ProducedHashPair;
-typedef std::function<ProducedHashPair(const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)> SingleWordFunctor;
 
 DictionaryVec dictionary;
 
@@ -68,33 +59,26 @@ void loadDictionary(const std::string& fileName)
   }
 }
 
-extern std::mutex foundPasswordsMtx;
 extern std::atomic<uint64_t> n;
-extern std::vector<ProducedHashPair> foundPasswords;
 
 int main()
 {
   PasswordMap passwordHashes;
-
   loadDictionary("slownik.txt");
   loadPasswords("baza.txt", passwordHashes);
 
   ThreadManager threadManager {passwordHashes};
   threadManager.launchProducers();
-  std::this_thread::sleep_for(std::chrono::seconds(6));
+  threadManager.launchConsumer();
 
-  threadManager.stopProducers();
-
-  std::lock_guard<std::mutex> lock(foundPasswordsMtx);
-  for (const auto& foundPassword : foundPasswords) {
-    auto range = passwordHashes.equal_range(foundPassword.second);
-    std::for_each(
-      range.first,
-      range.second,
-      [&foundPassword](PasswordMap::value_type& x){ std::cout << foundPassword.first << " "<< x.second << std::endl;}
-    );
-    //std::cout << std::endl;
+  std::string cmd;
+  while(true) {
+    std::cin >> cmd;
+    if (cmd == "q") {
+      break;
+    }
   }
-  std::cout << "hashow/s: " << n.load()/6.0 << std::endl;
+  threadManager.stopProducers();
+  std::cout << "zmielonych hashow: " << n.load() << std::endl;
   return 0;
 }

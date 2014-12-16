@@ -21,15 +21,13 @@
 #include <thread>
 #include <vector>
 #include "hash.h"
-typedef std::vector<std::thread> ThreadVec;
-typedef std::vector<std::string> DictionaryVec;
-extern DictionaryVec dictionary;
 
+typedef std::vector<std::string> DictionaryVec;
 typedef DictionaryVec::const_iterator DictionaryIterator;
 
 typedef std::vector<std::thread> ThreadVec;
 typedef std::pair<std::string, Hash> ProducedHashPair;
-typedef std::function<ProducedHashPair(const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)> SingleWordFunctor;
+
 class ThreadManager
 {
 public:

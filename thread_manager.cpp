@@ -18,11 +18,21 @@
 #include "thread_manager.h"
 #include <atomic>
 #include <mutex>
+#include <iostream>
+#include <algorithm>
+#include <condition_variable>
 
+extern DictionaryVec dictionary;
 std::vector<ProducedHashPair> foundPasswords;
 std::mutex foundPasswordsMtx;
+std::condition_variable cv;
+
 std::atomic<uint64_t> n {0};
+const uint32_t FLUSH_BUFFER_SIZE = 10;
+const uint32_t NOTIFY_SIZE = 20;
 bool run = true;
+
+typedef std::function<ProducedHashPair(const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)> SingleWordFunctor;
 
 const std::array<SingleWordFunctor, 3> SINGLE_WORD_FUNCTORS 
 {
@@ -59,6 +69,8 @@ const std::array<SingleWordFunctor, 3> SINGLE_WORD_FUNCTORS
 void producerThreadMain(const DictionaryIterator begin, const DictionaryIterator end, const PasswordMap& passwordHashes)
 {
   uint64_t round = 0;
+  std::vector<ProducedHashPair> buffer;
+  buffer.reserve(SINGLE_WORD_FUNCTORS.size());
 
   while (true) {
     auto it = begin;
@@ -67,8 +79,22 @@ void producerThreadMain(const DictionaryIterator begin, const DictionaryIterator
       for (const auto& getPasswordHashPair : SINGLE_WORD_FUNCTORS) {
 	auto newProduct = getPasswordHashPair(dictionary, it, round);
 	if (passwordHashes.find(newProduct.second) != passwordHashes.end()) {
-	  std::lock_guard<std::mutex> lock {foundPasswordsMtx};
+	  buffer.emplace_back(std::move(newProduct));
+	}
+      }
+
+      //Sekcja krytyczna
+      //Jesli w buforze danego watku producenta uzbiera sie odp. liczba el.
+      //to flushujemy zawartosc do wektora znalezionych hasel
+      if (buffer.size() > FLUSH_BUFFER_SIZE) {
+	std::unique_lock<std::mutex> lock {foundPasswordsMtx};
+	for(auto& newProduct : buffer) {
 	  foundPasswords.emplace_back(std::move(newProduct));
+	}
+	buffer.clear();
+	if (foundPasswords.size() > NOTIFY_SIZE) {
+	    lock.unlock();
+	    cv.notify_one();
 	}
       }
       if (!run) {
@@ -82,20 +108,37 @@ void producerThreadMain(const DictionaryIterator begin, const DictionaryIterator
   }
 }
 
-void consumerThreadMain()
+void consumerThreadMain(const PasswordMap& passwordHashes)
 {
-  static std::vector<ProducedHashPair> results;
-  while(run) {
-
-    {
-      std::lock_guard<std::mutex> {foundPasswordsMtx};
+  std::vector<ProducedHashPair> results;
+  uint32_t foundPasswordsNumber = 0;
+  uint32_t foundUserAccounts = 0;
+  while (run) {
+    { 
+      //Sekcja krytyczna - zamieniamy miejscami wektory foundPasswords i results po tym jak
+      //konsument zostaje obudzony dzieki czemu nie realokujemy pamieci,
+      //a jedynie wykonujemy zamiane 2*3 slow maszynowych
+      std::unique_lock<std::mutex> lk(foundPasswordsMtx);
+      cv.wait(lk);
       std::swap(foundPasswords, results);
     }
 
-    for (const auto& result : results) {
-      
+    for (const auto& foundPassword : results) {
+      auto range = passwordHashes.equal_range(foundPassword.second);
+      ++foundPasswordsNumber;
+      std::for_each(
+	range.first,
+	range.second,
+	[&foundPassword, &foundUserAccounts](const PasswordMap::value_type& x) {
+	    std::cout << foundPassword.first << " " << x.second << std::endl;
+	    ++foundUserAccounts;
+	}
+      );
+      std::cout << "---------------------------------------------------------" << std::endl;
     }
+    results.clear();
   }
+  std::cout << "Znaleziono haseł: " << foundPasswordsNumber << ", kont: "  << foundUserAccounts << std::endl;
 }
 
 ThreadManager::ThreadManager(const PasswordMap& passwordHashes)
@@ -107,12 +150,13 @@ ThreadManager::ThreadManager(const PasswordMap& passwordHashes)
 ThreadManager::~ThreadManager()
 {
   stopProducers();
-  //m_consumer.join();
+  cv.notify_one();
+  m_consumer.join();
 }
 
 void ThreadManager::launchConsumer()
 {
-  m_consumer = std::thread(consumerThreadMain);
+  m_consumer = std::thread(std::bind(consumerThreadMain, m_passwordHashes));
 }
 
 void ThreadManager::launchProducers()
