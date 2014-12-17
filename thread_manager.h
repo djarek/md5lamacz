@@ -31,16 +31,17 @@ typedef std::pair<std::string, Hash> ProducedHashPair;
 class ThreadManager
 {
 public:
-  ThreadManager(const PasswordMap& passwordHashes);
+  ThreadManager(const PasswordMap& passwordHashes, const DictionaryVec& dictionary);
   ~ThreadManager();
   void launchProducers();
   void launchConsumer();
   void stopProducers();
-
+  void stopAllThreads();
 private:
   ThreadVec m_producers;
   std::thread m_consumer;
   const PasswordMap& m_passwordHashes;
+  const DictionaryVec& m_dictionary;
 };
 
 #endif //__THREAD_MANAGER_H__

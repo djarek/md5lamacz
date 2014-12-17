@@ -22,7 +22,6 @@
 #include <algorithm>
 #include <condition_variable>
 
-extern DictionaryVec dictionary;
 std::vector<ProducedHashPair> foundPasswords;
 std::mutex foundPasswordsMtx;
 std::condition_variable cv;
@@ -32,11 +31,12 @@ const uint32_t FLUSH_BUFFER_SIZE = 10;
 const uint32_t NOTIFY_SIZE = 20;
 bool run = true;
 
-typedef std::function<ProducedHashPair(const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)> SingleWordFunctor;
+typedef std::function<ProducedHashPair(const DictionaryIterator& it, const uint64_t& round)> SingleWordFunctor;
+typedef std::function<ProducedHashPair(const DictionaryIterator& it, const DictionaryIterator& it2, const uint64_t& round)> DoubleWordFunctor;
 
 const std::array<SingleWordFunctor, 3> SINGLE_WORD_FUNCTORS 
 {
-  [](const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)
+  [](const DictionaryIterator& it, const uint64_t& round)
   {
     if (round == 0) {
       return std::make_pair(*it, Hash(*it));
@@ -46,7 +46,7 @@ const std::array<SingleWordFunctor, 3> SINGLE_WORD_FUNCTORS
       return std::make_pair(str, Hash(str));
     }
   },
-  [](const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)
+  [](const DictionaryIterator& it, const uint64_t& round)
   {
     std::string str = *it;
     str[0] = std::toupper(str[0]);
@@ -55,7 +55,7 @@ const std::array<SingleWordFunctor, 3> SINGLE_WORD_FUNCTORS
     }
     return std::make_pair(str, Hash(str));
   },
-  [](const DictionaryVec& vec, const DictionaryIterator& it, const uint64_t& round)
+  [](const DictionaryIterator& it, const uint64_t& round)
   {
     std::string str = *it;
     toUpper(str);
@@ -65,24 +65,53 @@ const std::array<SingleWordFunctor, 3> SINGLE_WORD_FUNCTORS
     return std::make_pair(str, Hash(str));
   }
 };
+const char characters[] = {'!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', ':', '"', ';', '\'', '\\', '[', ']', '{', '}', ',', '.', '/', '?', '`', '~', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+const auto DOUBLE_WORD_ROUND_LIM = sizeof(characters);
 
-void producerThreadMain(const DictionaryIterator begin, const DictionaryIterator end, const PasswordMap& passwordHashes)
+const std::array<DoubleWordFunctor, 3> DOUBLE_WORD_FUNCTORS
+{
+  [](const DictionaryIterator& it, const DictionaryIterator& it2, const uint64_t& round)
+  {
+    auto str = *it + *it2 + std::to_string(round);
+    return std::make_pair(str, Hash(str));
+  },
+  [](const DictionaryIterator& it, const DictionaryIterator& it2, const uint64_t& round)
+  {
+    auto str = *it + characters[round % sizeof(characters)] + *it2;
+    return std::make_pair(str, Hash(str));
+  },
+  [](const DictionaryIterator& it, const DictionaryIterator& it2, const uint64_t& round)
+  {
+    auto str = *it + *it2 + characters[round % sizeof(characters)];
+    return std::make_pair(str, Hash(str));
+  },
+};
+
+void producerThreadMain(const DictionaryVec& dictionary, const DictionaryIterator begin, const DictionaryIterator end, const PasswordMap& passwordHashes)
 {
   uint64_t round = 0;
   std::vector<ProducedHashPair> buffer;
-  buffer.reserve(SINGLE_WORD_FUNCTORS.size());
+  buffer.reserve(SINGLE_WORD_FUNCTORS.size() + DOUBLE_WORD_FUNCTORS.size());
 
   while (true) {
     auto it = begin;
+    auto it2 = dictionary.begin();
     
     while (it < end) {
       for (const auto& getPasswordHashPair : SINGLE_WORD_FUNCTORS) {
-	auto newProduct = getPasswordHashPair(dictionary, it, round);
+	auto newProduct = getPasswordHashPair(it, round);
 	if (passwordHashes.find(newProduct.second) != passwordHashes.end()) {
 	  buffer.emplace_back(std::move(newProduct));
 	}
       }
-
+      if (round <= DOUBLE_WORD_ROUND_LIM) {
+	for (const auto& getPasswordHashPair : DOUBLE_WORD_FUNCTORS) {
+	  auto newProduct = getPasswordHashPair(it, it2, round);
+	  if (passwordHashes.find(newProduct.second) != passwordHashes.end()) {
+	    buffer.emplace_back(std::move(newProduct));
+	  }
+	}
+      }
       //Sekcja krytyczna
       //Jesli w buforze danego watku producenta uzbiera sie odp. liczba el.
       //to flushujemy zawartosc do wektora znalezionych hasel
@@ -102,6 +131,9 @@ void producerThreadMain(const DictionaryIterator begin, const DictionaryIterator
 	return;
       }
       ++it;
+      if (++it2 == dictionary.end()) {
+	it2 = dictionary.begin();
+      }
     }
     n.fetch_add(dictionary.size());
     ++round;
@@ -118,8 +150,8 @@ void consumerThreadMain(const PasswordMap& passwordHashes)
       //Sekcja krytyczna - zamieniamy miejscami wektory foundPasswords i results po tym jak
       //konsument zostaje obudzony dzieki czemu nie realokujemy pamieci,
       //a jedynie wykonujemy zamiane 2*3 slow maszynowych
-      std::unique_lock<std::mutex> lk(foundPasswordsMtx);
-      cv.wait(lk);
+      std::unique_lock<std::mutex> lock {foundPasswordsMtx};
+      cv.wait(lock);
       std::swap(foundPasswords, results);
     }
 
@@ -141,17 +173,16 @@ void consumerThreadMain(const PasswordMap& passwordHashes)
   std::cout << "Znaleziono haseł: " << foundPasswordsNumber << ", kont: "  << foundUserAccounts << std::endl;
 }
 
-ThreadManager::ThreadManager(const PasswordMap& passwordHashes)
+ThreadManager::ThreadManager(const PasswordMap& passwordHashes, const DictionaryVec& dictionary)
   : m_passwordHashes(passwordHashes)
+  , m_dictionary(dictionary)
 {
 
 }
 
 ThreadManager::~ThreadManager()
 {
-  stopProducers();
-  cv.notify_one();
-  m_consumer.join();
+  stopAllThreads();
 }
 
 void ThreadManager::launchConsumer()
@@ -162,18 +193,18 @@ void ThreadManager::launchConsumer()
 void ThreadManager::launchProducers()
 {
   auto n = std::max(std::thread::hardware_concurrency(), 1u);
-  uint64_t wordsPerThread = dictionary.size()/n;
+  uint64_t wordsPerThread = m_dictionary.size()/n;
 
-  auto begin = dictionary.begin();
-  auto end = dictionary.begin() + wordsPerThread;
+  auto begin = m_dictionary.begin();
+  auto end = m_dictionary.begin() + wordsPerThread;
   if (wordsPerThread > 0) {
     for (uint32_t i = 0; i < n-1; ++i) {
-      m_producers.emplace_back(std::bind(producerThreadMain, begin, end, m_passwordHashes));
+      m_producers.emplace_back(std::bind(producerThreadMain, m_dictionary, begin, end, m_passwordHashes));
       begin += wordsPerThread;
       end += wordsPerThread;
     }
   }
-  m_producers.emplace_back(std::bind(producerThreadMain, begin, dictionary.end(), m_passwordHashes));
+  m_producers.emplace_back(std::bind(producerThreadMain, m_dictionary, begin, m_dictionary.end(), m_passwordHashes));
 }
 
 void ThreadManager::stopProducers()
@@ -185,3 +216,9 @@ void ThreadManager::stopProducers()
   m_producers.clear();
 }
 
+void ThreadManager::stopAllThreads()
+{
+  stopProducers();
+  cv.notify_one();
+  m_consumer.join();
+}

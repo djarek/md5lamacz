@@ -25,9 +25,7 @@
 #include "hash.h"
 #include "thread_manager.h"
 
-DictionaryVec dictionary;
-
-void loadPasswords(const std::string& fileName, PasswordMap& map)
+void loadPasswords(PasswordMap& map, const std::string& fileName)
 {
   std::ifstream inputFile(fileName);
   uint64_t id = 0;
@@ -40,7 +38,7 @@ void loadPasswords(const std::string& fileName, PasswordMap& map)
   }
 }
 
-void loadDictionary(const std::string& fileName)
+void loadDictionary(DictionaryVec& dictionary, const std::string& fileName)
 {
   dictionary.clear();
   std::ifstream inputFile(fileName);
@@ -64,10 +62,12 @@ extern std::atomic<uint64_t> n;
 int main()
 {
   PasswordMap passwordHashes;
-  loadDictionary("slownik.txt");
-  loadPasswords("baza.txt", passwordHashes);
+  DictionaryVec dictionary;
+  
+  loadDictionary(dictionary, "slownik.txt");
+  loadPasswords(passwordHashes, "baza.txt");
 
-  ThreadManager threadManager {passwordHashes};
+  ThreadManager threadManager {passwordHashes, dictionary};
   threadManager.launchProducers();
   threadManager.launchConsumer();
 
@@ -76,6 +76,10 @@ int main()
     std::cin >> cmd;
     if (cmd == "q") {
       break;
+    } else if (cmd == "slownik") {
+      threadManager.stopAllThreads();
+      std::cin >> cmd;
+      loadDictionary(dictionary, cmd);
     }
   }
   threadManager.stopProducers();
